@@ -82,6 +82,12 @@ thing itself — a card naming the app, with a Connect button.
   access that was withdrawn. An app shared across the deployment still says to ask an administrator,
   since the person reading cannot connect it.
 
+### No-sign-in startup rejects addresses without a host
+
+With `OPENBOT_SINGLE_USER=true`, an address such as `example.com:3010` in `OPENBOT_PUBLIC_URL`,
+`OPENBOT_APP_URL` or `TRUSTED_ORIGINS` now refuses startup. It previously counted as a private
+network address and only warned, even though the missing URL scheme left its host unidentified.
+
 ### A reply's tool calls fold into one line
 
 A Bot that searched, read two pages and checked Drive before answering drew four lines above its
