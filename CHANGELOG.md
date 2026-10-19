@@ -63,6 +63,12 @@ on a still screen, for an action that never happened.
   three — but the Bot was still offered the tools, so it reached for one, was refused, and spent the
   turn saying so. The tools a switch turns off are now withheld from the Bot in the first place.
 
+### A repeated minute in a routine's schedule is described once
+
+A schedule like `0,30,0 9 * * *` fires at 09:00 and 09:30, but the routines page and the model were
+told "Every day at 09:00, 09:00 and 09:30". Repeated minutes are now said once, as repeated weekdays
+already were.
+
 ### An app you have not connected is offered where you are reading
 
 A Bot asked to use an app whose account the person had not connected answered with the name of a
