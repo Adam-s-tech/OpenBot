@@ -38,6 +38,12 @@ An email trigger reads an HTML-only mail by stripping its tags, and the characte
 the Bot read `AT&amp;T`, `we&#8217;re` and `Q3&nbsp;numbers`. Numeric references, `&amp;`, `&lt;`,
 `&gt;`, `&quot;`, `&apos;` and `&nbsp;` are now decoded, once, so `&amp;lt;` reads as `&lt;`.
 
+### An email in another charset reaches its trigger as the sender wrote it
+
+A base64 or quoted-printable email part was always read as UTF-8, whatever charset its Content-Type
+named, so an `iso-8859-1` mail reached the Bot with every accented letter turned into `�`. Each part
+is now decoded in the charset it names, and a charset the runtime does not know still reads as UTF-8.
+
 ### The Bot's screen opens only when there is something to watch
 
 Asking a Bot a question it answered in words could still open its computer beside the conversation,
