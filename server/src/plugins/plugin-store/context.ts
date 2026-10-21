@@ -44,6 +44,7 @@ import {
   connectionSiblings,
   exchangeRefreshTokenOverHttp,
   INVALID_CLIENT,
+  INVALID_GRANT,
   isUsableClient,
   type OAuthClient,
   PluginInvariantError,
@@ -661,13 +662,22 @@ export function createStoreContext(options: PluginStoreOptions) {
         .limit(1);
       if (!connected) {
         /*
-         * Only the personal half carries a connect prompt. A Shared app's account belongs to the
-         * deployment, so the person reading this cannot connect it however clearly they are asked —
-         * a card offering them the button would be an invitation to a refusal.
+         * BOTH HALVES CARRY A PROMPT, AND ONLY ONE OF THEM OFFERS A CONNECT BUTTON. A Shared app's
+         * account belongs to the deployment, so the person reading this cannot connect it however
+         * clearly they are asked — a card offering them that button would be an invitation to a
+         * refusal. What the card draws is decided by the app's state for this person, read when it
+         * is drawn: for a missing team account that is Request access, which files the request an
+         * administrator answers by connecting it. The sentence stays for the model and for a reader
+         * with no card. `reason: "shared"` is only a hint; see `ConnectReason`.
          */
         throw new PluginRefusedError(
           resolved.ref.holder === "deployment"
-            ? `${row.title} is shared across this deployment and no account is connected to it yet. Ask an administrator to connect it.`
+            ? connectAppRefusal({
+                serverId: row.id,
+                title: row.title,
+                message: `${row.title} is shared across this deployment and no account is connected to it yet. Ask an administrator to connect it.`,
+                reason: "shared",
+              })
             : connectAppRefusal({
                 serverId: row.id,
                 title: row.title,
@@ -928,6 +938,8 @@ export function createStoreContext(options: PluginStoreOptions) {
        * token it had read on the way in would present the one the first replica just spent, which is
        * the very double-spend this exists to prevent.
        */
+      /** The credential whose refresh token went to the vendor, once one has. */
+      let presented: string | null = null;
       try {
         return await database.transaction(async (transaction) => {
           const [current] = await transaction
@@ -985,6 +997,7 @@ export function createStoreContext(options: PluginStoreOptions) {
             locked.encryptedValue,
           );
 
+          presented = current.credentialId;
           const minted = await exchangeRefreshToken({
             tokenUrl,
             client: stored.client,
@@ -1018,6 +1031,31 @@ export function createStoreContext(options: PluginStoreOptions) {
           return { token: minted.accessToken };
         });
       } catch (error) {
+        /*
+         * THE VENDOR DISOWNED THE GRANT, NOT THE CLIENT. A refresh token answered `invalid_grant`
+         * will never be honoured again, and until now nothing here wrote that down: the connection
+         * read as connected on every screen, and every call came back as the same folded tool
+         * error. Revoked here — after the transaction, for the reason the recovery below gives — the
+         * connection reads as withdrawn, which is Reconnect on the Bot page and on the card this
+         * refusal draws, and the consent that fixes it replaces the credential as any reconnect does.
+         */
+        if (
+          error instanceof TokenRefusedError &&
+          error.code === INVALID_GRANT &&
+          presented
+        ) {
+          await credentials.revoke(presented);
+          throw new PluginRefusedError(
+            connectAppRefusal({
+              serverId: row.id,
+              title,
+              message: `Your ${title} access was withdrawn at the vendor, so this was not done. Reconnect it and ask again.`,
+              reason: "reconnect",
+              at: new Date().toISOString(),
+            }),
+            null,
+          );
+        }
         /*
          * Outside the transaction, so the row lock is already released and the vault read this does
          * is not a second connection held behind this one's.

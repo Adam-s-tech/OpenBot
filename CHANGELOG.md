@@ -8,7 +8,7 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
 
 ## Unreleased
 
-**Before upgrading.** Five things change for an existing deployment:
+**Before upgrading.** Six things change for an existing deployment:
 - A hosted computer's browser is now headed by default. It uses a little more memory than headless
   did; set `COMPUTER_BROWSER_MODE=headless` (Helm: `computers.browserMode: headless`) to keep the old
   behaviour.
@@ -31,6 +31,39 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
 - Migration `0056_sign_in_code_step` widens the check on `sign_in_requests.status` to allow
   `code_required` (below). A server and a computer must be upgraded together: an older computer has
   no `/sign-in/code`.
+- Migration `0060_app_access_requests` adds one table, `app_access_requests`, where a person's
+  request for an administrator to switch on a work app, grant it to a Bot, or connect a Shared app's
+  team account is kept, with who answered it and when. It starts empty and nothing is backfilled.
+
+### Each app on a Bot says whether you can use it, and you can ask an administrator for the rest
+
+A Bot's page now says, for every work app the Bot holds, what that app is for the person looking:
+ready, not connected yet, needing reconnecting, waiting on your organisation's shared account or on
+an administrator's approval of who the Bot reaches, not switched on or not finished setting up, or not
+given to this Bot. On somebody else's Team Bot it says whose account the app runs on: the owner's,
+which only the owner can reconnect, or your own, which the Bot asks to use the first time. Each comes with the one thing you can do about it —
+Connect or Reconnect your own account, or Request access where only an administrator can help — and
+apps are named by their own name ("Gmail", not "Composio Gmail"). In a conversation, a Bot that needs
+an app it cannot use now puts the same card in front of you instead of a sentence: an account you have
+not connected, a Shared app with no team account, an account the vendor no longer holds, and — through
+a new `show_app_access` tool every Bot holds — an app that is switched off or not granted to it. The
+card reads the app's current state when it is drawn, so it never offers a step already taken.
+Administrators see waiting requests at the top of Plugins, a count on each app's row, and a Requests
+section on the app's own page, where Approve switches the app on and grants the Bot the app's
+read-only actions in one press (or says what has to be done first; other actions are chosen on the
+Bot's page for the app) and Dismiss closes the request. Requests name who asked; nobody's connection
+status is shown to administrators. A person may have 20 requests waiting at once.
+
+A connection the vendor turns out to have lost now reads as lost everywhere once a call finds out: a
+Composio account the vendor no longer holds is removed so it can be connected again, and a Google
+Drive or Notion connection whose refresh token the vendor refuses is marked withdrawn, with Reconnect
+on the card instead of a tool error. A Memory source that fails for the same reasons says so in words
+rather than showing the card's marker.
+
+On a deployment with no `COMPOSIO_API_KEY`, Settings → Connected accounts no longer lists Composio
+apps, which nobody could connect there. An app's own page, reached from an older link, says it is not
+available yet and that an administrator has to finish setting it up, instead of naming the setting.
+The administrator's page for the app still names `COMPOSIO_API_KEY`.
 
 ### A new desktop install starts its server again
 
