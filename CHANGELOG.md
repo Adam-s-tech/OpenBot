@@ -35,6 +35,27 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
   request for an administrator to switch on a work app, grant it to a Bot, or connect a Shared app's
   team account is kept, with who answered it and when. It starts empty and nothing is backfilled.
 
+### A Bot with an app or web research can use its browser in a conversation again
+
+A Bot that held any app or research tool, such as Parallel Search, could not open a page, click or
+type in a conversation: every browser and computer step came back as unavailable, and the Bot
+fetched the page some other way instead. Its browser now works beside those tools, as it does for a
+Bot that holds none. Routines and other unattended turns are unchanged.
+
+### An app a Bot could not use asks to be connected once
+
+When a Bot reached for an app the person had not connected, such as Airtable, the conversation drew
+the Connect card twice, and still did after a reload. The built-in LangGraph Bot now names the message
+its tool calls belong to the way the conversation store does, so a conversation no longer keeps a
+second copy of every tool call, and a conversation that already has one draws each call once.
+
+### An app's steps are named for the app, never for the service behind it
+
+A conversation named a Composio app's work after the broker and the vendor's own prefix: "Used
+Composio Airtable", then "Airtable list bases". It now says "Used Airtable", and each step reads as
+the action, "List bases", with the app beside it. An Arcade app is named the same way, as the app
+rather than `arcade-Gmail`.
+
 ### Plainer words, and one word for each thing
 
 OpenBot now says **Bot** everywhere a person reads it, where screens used to mix Bot, agent, coworker
