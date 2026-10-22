@@ -35,6 +35,28 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
   request for an administrator to switch on a work app, grant it to a Bot, or connect a Shared app's
   team account is kept, with who answered it and when. It starts empty and nothing is backfilled.
 
+### A Bot can send, draft and reply in Gmail
+
+OpenBot left out every Composio action that takes a file, because a Bot has no way to supply one.
+That also left out actions where the file is optional, such as an email's attachment, so Gmail's
+send, draft, reply and update-draft actions never appeared and a Bot could read mail but not send
+it. These actions are now offered without the optional file, and a call that includes one anyway is
+refused with a message saying to try again without it. An action that cannot run without a file,
+such as uploading one to Google Drive, is still left out. For an app that is already on, press
+Refresh tools on its page in Admin to list the new actions, then grant them to a Bot as usual.
+
+### Connect works for an app Composio already holds your account for
+
+Pressing Connect on a Composio app, from a conversation's Connect card or from Connections, could end
+in a refusal saying Composio already held a connected account for the app and that disconnecting it
+would clear the way. The app showed as not connected, so there was nothing to disconnect. This
+happened when Composio held the account and OpenBot had no record of it: on a fresh or upgraded
+install, or on a second local install signing in as the same person with the same Composio key. Connect
+now asks Composio again, records the account it holds, and shows the app as connected, the same way
+opening the app's page already did. A Shared app's team account is still recorded only by an admin.
+If Composio then reports no account after all, Connect says nothing was connected and asks you to
+press it again. It no longer tells you to disconnect anything.
+
 ### A Bot with an app or web research can use its browser in a conversation again
 
 A Bot that held any app or research tool, such as Parallel Search, could not open a page, click or
