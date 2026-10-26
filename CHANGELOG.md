@@ -8,7 +8,7 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
 
 ## Unreleased
 
-**Before upgrading.** Eight things change for an existing deployment:
+**Before upgrading.** Nine things change for an existing deployment:
 - A hosted computer's browser is now headed by default. It uses a little more memory than headless
   did; set `COMPUTER_BROWSER_MODE=headless` (Helm: `computers.browserMode: headless`) to keep the old
   behaviour.
@@ -39,6 +39,83 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
   research run replaces them.
 - Migration `0062_action_policy_labels` adds a `labels` column to `action_policies`, defaulting to
   empty. Existing boundary rules keep working and show as "Custom rule" until somebody names them.
+- On Helm's `shared` computer and the docker-compose `agent-computer`, each Bot's files now live in
+  `computers/<Bot id>` on the workspace volume (below). Files saved before the upgrade stay at the
+  root of the volume, where no Bot sees them; move them into a Bot's folder to give them back.
+
+### Each Bot on a shared computer has its own files
+
+A computer that serves many Bots kept one folder of files for all of them, so a note one Bot saved
+was a file every other Bot could list and read. Each Bot now gets its own folder, and its commands
+start there. Logins were already kept apart. This is on for Helm's `shared` computer and the
+docker-compose `agent-computer`, and `COMPUTER_SEPARATE_WORKSPACES=on` turns it on for the
+all-in-one image. A command can still read another Bot's folder, so a deployment that needs people
+kept apart should give each Bot a computer of its own (`computers.mode: sandbox`).
+
+### Every chart says where its figures came from
+
+A chart a Bot draws now ends with a line naming what its figures were read from and when they are
+from, such as "Sources: World Bank World Development Indicators · As of 2025". Figures a Bot charted
+from its own knowledge, without looking them up, are marked "From the Bot's own knowledge. Not
+checked against a source." Bots are told to look up figures that change over time before charting
+them. In Slack and Teams the same line follows the chart in the reply. Charts already in a
+conversation are drawn as before, with no such line.
+
+### A Bot searches with its search tool, never its browser
+
+Asked to search for something, a Bot could drive its browser to Google or another search engine
+instead of using the search tool it held. With a search tool it now searches with that, and keeps
+the browser for signing in, clicking through a site, filling in a form or opening a page the person
+named. Without one it answers from what it knows, says it has not checked, and shows a card for a
+search app (Parallel Search, Exa Search or Firecrawl) that the person can ask an administrator for.
+
+### A computer that is starting says so, instead of showing a problem
+
+Opening the Computer panel while a Bot's computer was asleep or starting showed "Can't show the
+screen right now", and an action during a cold start was marked "didn't work". The panel now says
+the computer is starting, or is off until the Bot next uses it, and shows a problem only when it
+can't be reached or has gone two and a half minutes without a picture; a live screen being
+reconnected shows a small "Reconnecting…" badge. An action turned away by a cold start reads "not
+done yet" and the Bot is told to try again. Looking at the panel no longer wakes a sleeping computer,
+a Bot says in one sentence what it is about to do before its first computer action, and a hosted
+computer's cold start answers within 45 seconds, under a load balancer's usual 60-second idle
+timeout. A Docker computer still booting its browser reads as starting once the supervisor is
+upgraded too; an older supervisor works as before.
+
+### A conversation shows who it is waiting on
+
+When a Bot asks another Bot, the end of the conversation now shows that Bot's avatar and "Asking
+Risk Analyst…" until the answer comes back; a routine firing into it reads "Market Scout is running a
+routine…". A Bot whose address this deployment will not dial is reported at once, not after five
+minutes of retries. The sidebar keeps the conversation lit while it waits, and both survive a
+reload. In a shared conversation only the person whose Bot asked sees whom it asked; the others see
+only that it is busy. Migration `0063_work_items_open_thread` adds one partial index to `work_items`.
+
+### A Bot's owner can give it their own apps
+
+The owner of a Bot can now let it use an app they connect for themselves, without an administrator:
+from the app card ("Let Research Bot use your Gmail?"), under Your apps on the Bot's page, or on the
+New Bot sheet, which offers their connected apps. Calls under such a grant always use the asking
+person's own account, even on a published Team Bot, and an owner can take back only what they gave.
+By default this covers apps each person connects for themselves and Routines; an administrator
+decides per app on its page, and can switch it off for people with the "Give apps to their own Bots"
+capability. Migration `0063_owner_app_grants` adds two nullable columns, `mcp_servers.owner_grants`
+and `plugin_grants.granted_as`.
+
+Where an administrator lets owners give a Shared app, an owner's grant works straight away: it lets
+the people who can use the Bot (just the owner, or a Team Bot's audience) use the team account, with
+no separate approval. Writes still ask first. Taking the app back, or the administrator switching the
+app back to admins only, withdraws that. Migration `0064_owner_shared_audience` adds the nullable
+`shared_use_approvals.approved_as`.
+
+### An app card carries the task on once the app is ready
+
+When a Bot stopped because it needed an app, and the person then connected it in another tab or an
+administrator turned it on for the Bot, the card said "Ask again". It now sends "Gmail is ready now.
+Please carry on." for the person, once, and the Bot picks the task back up; a card opened after the
+change offers Continue instead. An administrator looking at the card gets the fix itself, "Turn on
+and give it to Sales" or "Give it to Sales", which grants the app's read-only actions with the same
+checks and trail as approving a request, or a link to the app's page where one press can't do it.
 
 ### Screens share one spacing, row and empty-state design
 
