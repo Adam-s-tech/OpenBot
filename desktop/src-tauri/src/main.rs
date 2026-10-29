@@ -255,10 +255,67 @@ struct AlreadyConfigured {
     auto_start: bool,
 }
 
+/// The engine the install step left answering, if it left one.
+///
+/// Starting Docker Desktop leaves Docker answering, and the machine steps after the install step
+/// are Podman's: on a Mac or a PC without Podman, the first of them fails at `podman machine list`
+/// with Docker already running. A Podman the step installed or found answers only once its
+/// machine is up, so it is `None` here and the machine steps run.
+fn answering_after_install(
+    ready: &engine::EngineStatus,
+    composes: impl FnOnce(&engine::Address) -> bool,
+) -> Result<Option<engine::Address>, Problem> {
+    let Some(address) = ready.address.clone().filter(|_| ready.responding) else {
+        return Ok(None);
+    };
+    if !composes(&address) {
+        return Err(Problem::plain(acquire::missing_compose(
+            address.engine.binary(),
+        )));
+    }
+    Ok(Some(address))
+}
+
 struct ReadyRespondingEngine {
     address: engine::Address,
     detail: String,
     installed: Option<String>,
+}
+
+/// What Start does first, so the engine this installation runs on is answering.
+///
+/// Install brings the engine up; Start used to only look for it. So after a restart a Podman
+/// installation's machine was stopped and Start failed with "podman is installed but not
+/// answering", which nobody this app is for can act on. Now the saved engine is brought up:
+///
+/// - Docker: a stopped Docker Desktop is opened. It answered for this installation before.
+/// - Podman, or an installation from before engines were saved: OpenBot's own machine is
+///   started, when it exists. A machine is never created here, and nobody else's is started.
+///
+/// An engine that still does not answer is reported by the check after this one. An older
+/// installation that was on Docker cannot land on an empty machine: Start requires the
+/// installation's images on the engine it uses before it runs or saves anything.
+fn wake_saved_engine(
+    saved: Option<engine::Engine>,
+    engine_in_a_machine: bool,
+    answers: impl FnOnce() -> bool,
+    open_docker_desktop: impl FnOnce() -> Result<(), Problem>,
+    our_machine_exists: impl FnOnce() -> bool,
+    start_our_machine: impl FnOnce() -> Result<(), Problem>,
+) -> Result<(), Problem> {
+    if answers() {
+        return Ok(());
+    }
+    match saved {
+        Some(engine::Engine::Docker) => open_docker_desktop(),
+        Some(engine::Engine::Podman) | None => {
+            if engine_in_a_machine && our_machine_exists() {
+                start_our_machine()
+            } else {
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Return a responding engine only after Compose is present too.
@@ -390,7 +447,12 @@ fn cleanup_root(shell: &Shell, fallback_root: &Path) -> PathBuf {
 
 #[tauri::command]
 fn detect_engine<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> engine::EngineStatus {
-    let status = engine::detect();
+    let root = app
+        .try_state::<Shell>()
+        .and_then(|shell| shell.selected_root.lock().unwrap().clone());
+    let status = engine::detect_saved(preparation::saved_engine(
+        &root.unwrap_or_else(stack::default_root),
+    ));
     desktop_telemetry::observe_engine(&app, &status);
     status
 }
@@ -442,8 +504,13 @@ fn windows_blocker_instruction(blocker: win::Blocker) -> String {
 /// nothing moving in it reads as a hang.
 #[tauri::command]
 async fn prepare_engine(app: tauri::AppHandle) -> Result<engine::EngineStatus, Problem> {
-    engine_ready(&app).await?;
-    Ok(engine::detect())
+    let saved = {
+        let shell = app.state::<Shell>();
+        let root = shell.selected_root.lock().unwrap().clone();
+        preparation::saved_engine(&root.unwrap_or_else(stack::default_root))
+    };
+    let address = engine_ready(&app, saved).await?;
+    Ok(engine::detect_saved(Some(address.engine)))
 }
 
 /// Complete all local software acquisition before either authentication screen is available.
@@ -467,9 +534,15 @@ async fn prepare_installation(
             }
             remember_selected_root(&shell, &root);
         }
-        let address = tauri::async_runtime::block_on(engine_ready(&app))?.pin()?;
+        let saved = preparation::saved_engine(&root);
+        let address = tauri::async_runtime::block_on(engine_ready(&app, saved))?.pin()?;
         attempt.require_current()?;
         tauri::async_runtime::block_on(deployment_ready(&app, &root))?;
+        // Saved once the folder is there, before any image is pulled into the engine. Every later
+        // install and start uses this engine: see `preparation::saved_engine`.
+        if saved.is_none() {
+            preparation::save_engine(&root, address.engine)?;
+        }
         let picked = harness::picked(harness.as_ref(), &root).map_err(Problem::from)?;
         let handle = app.clone();
         let _startup = attempt.lock_current()?;
@@ -610,17 +683,22 @@ async fn prepare_installation(
 ///
 /// Reported step by step rather than as one result, because these take minutes and a window with
 /// nothing moving in it reads as a hang.
-async fn engine_ready(app: &tauri::AppHandle) -> Result<engine::Address, Problem> {
+/// `saved` is the engine the installation was set up on: only that one is looked at, started or
+/// installed. With none saved, `install::install_engine_with` chooses.
+async fn engine_ready(
+    app: &tauri::AppHandle,
+    saved: Option<engine::Engine>,
+) -> Result<engine::Address, Problem> {
     report_running(app, "engine", "Checking the software OpenBot needs.", None);
-    let found = engine::detect();
+    let found = engine::detect_saved(saved);
     desktop_telemetry::observe_engine(app, &found);
     let root = stack::default_root();
     let existing = tauri::async_runtime::spawn_blocking(move || {
         ready_responding_engine_after_compose_repair(
             found,
             cfg!(target_os = "linux"),
-            || install::install_engine(&root),
-            engine::detect,
+            || install::install_engine(&root, saved),
+            || engine::detect_saved(saved),
             engine::Address::composes,
         )
     })
@@ -676,20 +754,30 @@ async fn engine_ready(app: &tauri::AppHandle) -> Result<engine::Address, Problem
         None,
     );
     let telemetry_app = app.clone();
+    let progress_app = app.clone();
     let installed = tauri::async_runtime::spawn_blocking(move || {
-        install::install_engine_observed(&stack::default_root(), |success| {
-            desktop_telemetry::record(
-                &telemetry_app,
-                telemetry::EventData::EngineInstalled {
-                    engine: telemetry::Engine::Podman,
-                    outcome: if success {
-                        telemetry::EngineInstallOutcome::Success
-                    } else {
-                        telemetry::EngineInstallOutcome::Failure
+        install::install_engine_observed(
+            &stack::default_root(),
+            saved,
+            |engine, success| {
+                desktop_telemetry::record(
+                    &telemetry_app,
+                    telemetry::EventData::EngineInstalled {
+                        engine: match engine {
+                            engine::Engine::Docker => telemetry::Engine::Docker,
+                            engine::Engine::Podman => telemetry::Engine::Podman,
+                        },
+                        outcome: if success {
+                            telemetry::EngineInstallOutcome::Success
+                        } else {
+                            telemetry::EngineInstallOutcome::Failure
+                        },
                     },
-                },
-            );
-        })
+                );
+            },
+            // Starting Docker Desktop can take minutes; each line says where it is.
+            &mut |said| report_running(&progress_app, "install-engine", said, None),
+        )
     })
     .await
     .map_err(|error| {
@@ -698,14 +786,24 @@ async fn engine_ready(app: &tauri::AppHandle) -> Result<engine::Address, Problem
             format!("the install task did not run: {error}"),
         )
     })?;
-    match installed {
-        Ok(said) => {
-            report(app, "install-engine", true, said);
+    let chosen = match installed {
+        Ok(chosen) => {
+            report(app, "install-engine", true, chosen.said);
+            chosen.engine
         }
         Err(problem) => {
             report(app, "install-engine", false, problem.said.clone());
             return Err(problem);
         }
+    };
+
+    // Only the engine the install step settled on: a Docker that started answering meanwhile is
+    // not the one a Podman installation's machine steps are for.
+    let after = engine::detect_saved(Some(chosen));
+    if let Some(address) = answering_after_install(&after, engine::Address::composes)? {
+        desktop_telemetry::observe_engine(app, &after);
+        report(app, "engine", true, after.detail);
+        return Ok(address);
     }
 
     // One at a time, and each only if the last one worked. Written as a loop over an array once,
@@ -737,7 +835,7 @@ async fn engine_ready(app: &tauri::AppHandle) -> Result<engine::Address, Problem
         return Err(gate.problem());
     }
 
-    let ready = engine::detect();
+    let ready = engine::detect_saved(Some(chosen));
     desktop_telemetry::observe_engine(app, &ready);
     let address = ready
         .address
@@ -818,7 +916,7 @@ async fn deployment_ready<R: tauri::Runtime>(
 ///
 /// Require completed local installation before starting an authentication container.
 fn prepared_sign_in(root: &Path, published: &str) -> Result<(engine::Address, String), Problem> {
-    let status = engine::detect();
+    let status = engine::detect_saved(preparation::saved_engine(root));
     let address = status
         .address
         .filter(|_| status.responding)
@@ -1484,6 +1582,55 @@ async fn start_stack_inner<R: tauri::Runtime>(
         )
     })?;
 
+    // The installation's own engine, brought up when it is stopped: here, before startup is held,
+    // because it can take minutes and Quit must not wait on it. See `wake_saved_engine`.
+    let saved = preparation::saved_engine(&root);
+    let owned = shell.containers.lock().unwrap().is_some();
+    if !owned {
+        let progress_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            wake_saved_engine(
+                saved,
+                cfg!(any(target_os = "macos", target_os = "windows")),
+                || engine::detect_saved(saved).responding,
+                || {
+                    openbot_desktop_lib::docker_desktop::start_saved(&mut |said| {
+                        report_running(&progress_app, "engine", said, None)
+                    })
+                },
+                || acquire::machine_exists().unwrap_or(false),
+                || {
+                    report_running(
+                        &progress_app,
+                        "start-machine",
+                        "Starting the engine machine.",
+                        None,
+                    );
+                    let started = acquire::start_machine();
+                    report(
+                        &progress_app,
+                        "start-machine",
+                        started.ok,
+                        started.said.clone(),
+                    );
+                    if started.ok {
+                        Ok(())
+                    } else {
+                        Err(started.problem())
+                    }
+                },
+            )
+        })
+        .await
+        .map_err(|error| {
+            Problem::with(
+                "OpenBot could not start the software it runs on. Try again.",
+                error.to_string(),
+            )
+        })??;
+        attempt.require_current()?;
+    }
+
     let (logs, bun, mut secrets, ports, local_browser) = {
         let _startup = attempt.lock_current()?;
 
@@ -1502,7 +1649,7 @@ async fn start_stack_inner<R: tauri::Runtime>(
             .map(|owned| owned.address.clone());
         let status = match owned_address {
             Some(address) => address.status(),
-            None => engine::detect(),
+            None => engine::detect_saved(saved),
         };
         let Some(found) = status.address.clone().filter(|_| status.responding) else {
             return Err(status.detail.into());
@@ -1514,6 +1661,11 @@ async fn start_stack_inner<R: tauri::Runtime>(
         let status = found.status();
         acquire::prepare_for_compose(&found)?;
         let bun = preparation::require(&root, Some(&requested_harness), &found)?;
+        // An installation from before engines were saved is pinned to the one its images were
+        // just found on. Best effort: Start does not fail over a hint for next time.
+        if saved.is_none() {
+            let _ = preparation::save_engine(&root, found.engine);
+        }
 
         // Checked here as well as in the health gate, because the gate only runs when an engine had to
         // be installed. A machine that already had Podman skips all of that and arrives at Compose,
@@ -3098,7 +3250,7 @@ async fn ask_the_bot_with_settings(
         Err(None) => {
             let log = log_service
                 .and_then(|service| {
-                    engine::detect()
+                    engine::detect_saved(preparation::saved_engine(&root))
                         .address
                         .map(|found| stack::service_log(&found, &root, service, 40))
                 })
@@ -6677,6 +6829,102 @@ mod tests {
         assert_eq!(ready.address.engine, engine::Engine::Podman);
         assert!(ready.address.connection.is_none());
         assert_eq!(*trace.borrow(), ["install", "detect", "compose"]);
+    }
+
+    #[test]
+    fn a_docker_desktop_started_by_the_install_step_skips_the_podman_machine() {
+        let docker = engine::EngineStatus {
+            engine: Some(engine::Engine::Docker),
+            address: Some(engine::Address::new(engine::Engine::Docker, None)),
+            responding: true,
+            engine_socket: None,
+            detail: "docker is answering.".into(),
+        };
+        let address = answering_after_install(&docker, |_| true)
+            .unwrap()
+            .expect("an answering Docker needs no Podman machine");
+        assert_eq!(address.engine, engine::Engine::Docker);
+
+        let problem = answering_after_install(&docker, |_| false).unwrap_err();
+        assert_eq!(
+            problem.said,
+            acquire::missing_compose(engine::Engine::Docker.binary())
+        );
+    }
+
+    #[test]
+    fn a_podman_without_its_machine_still_gets_the_machine_steps() {
+        let podman = engine::EngineStatus {
+            engine: Some(engine::Engine::Podman),
+            address: None,
+            responding: false,
+            engine_socket: None,
+            detail: "podman is installed but not answering. Start it and try again.".into(),
+        };
+        assert!(
+            answering_after_install(&podman, |_| panic!("nothing answers to run Compose"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn start_brings_up_the_engine_this_installation_runs_on() {
+        use engine::Engine::{Docker, Podman};
+        use std::cell::RefCell;
+        // (saved, in a machine, answers, our machine exists) -> what was done
+        let run = |saved, in_machine, answers, exists| {
+            let done = RefCell::new(Vec::new());
+            wake_saved_engine(
+                saved,
+                in_machine,
+                || answers,
+                || {
+                    done.borrow_mut().push("open Docker Desktop");
+                    Ok(())
+                },
+                || exists,
+                || {
+                    done.borrow_mut().push("start our machine");
+                    Ok(())
+                },
+            )
+            .unwrap();
+            done.into_inner()
+        };
+        let none: [&str; 0] = [];
+        // Answering: nothing is done, whatever was saved.
+        for saved in [Some(Docker), Some(Podman), None] {
+            assert_eq!(run(saved, true, true, true), none, "{saved:?}");
+        }
+        // A saved Docker opens Docker Desktop, never a Podman machine.
+        assert_eq!(
+            run(Some(Docker), true, false, true),
+            ["open Docker Desktop"]
+        );
+        // A saved Podman after a restart: OpenBot's machine is started.
+        assert_eq!(run(Some(Podman), true, false, true), ["start our machine"]);
+        // An installation from before engines were saved, with nothing answering: the same.
+        assert_eq!(run(None, true, false, true), ["start our machine"]);
+        // No machine of ours: none is created and nobody else's is started.
+        assert_eq!(run(Some(Podman), true, false, false), none);
+        assert_eq!(run(None, true, false, false), none);
+        // Linux runs Podman natively: there is no machine to start.
+        assert_eq!(run(Some(Podman), false, false, true), none);
+    }
+
+    #[test]
+    fn a_machine_that_fails_to_start_stops_start_with_its_own_words() {
+        let problem = wake_saved_engine(
+            Some(engine::Engine::Podman),
+            true,
+            || false,
+            || panic!("a Podman installation never opens Docker Desktop"),
+            || true,
+            || Err(Problem::plain("machine did not start")),
+        )
+        .unwrap_err();
+        assert_eq!(problem.said, "machine did not start");
     }
 
     #[test]
