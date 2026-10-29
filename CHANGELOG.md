@@ -100,6 +100,12 @@ The newest come first, and a press on When turns the order round. A search box a
 Started by buttons narrow the events already loaded, and the count says how many of them match. A
 row about a Bot (a message routed to it, say) now names it under Bot.
 
+### The desktop setup page does not freeze when it loads during an install
+
+If the setup page loaded again while the desktop app downloaded local software, the window showed a
+spinning cursor until the download finished. Its checks for a running OpenBot and for the last
+failure now wait in the background, so the window keeps answering.
+
 ### Each Bot on a shared computer has its own files
 
 A computer that serves many Bots kept one folder of files for all of them, so a note one Bot saved
