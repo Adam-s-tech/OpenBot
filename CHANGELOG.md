@@ -606,6 +606,16 @@ close it, and the reason is in the server's and the computer's logs.
 Clicking or focusing the desktop window while it downloaded local software showed a spinning cursor
 until the download finished. The window now comes forward at once and keeps the setup screen.
 
+### A reinstall no longer picks up the previous installation's Bot files and sign-ins
+
+A desktop installation set up again after its folder was deleted reused whatever the previous one
+left in the container engine: Bot workspace files, and each Bot's browser profile with its website
+sign-ins, under the same Bot ids. Only the database was checked. Start now finds every volume and
+stopped container the previous installation left and offers Start fresh, which deletes exactly those
+and then starts; nothing is reused without asking. To keep the data, restore the previous folder
+instead. A container from it that is still running stops the deletion until it is stopped. An
+installation with its saved key keeps its data as before.
+
 ### A new desktop install starts its server again
 
 A desktop install of v0.2.0 stopped at start with `server stopped straight away (exit status: 1)` and
