@@ -385,6 +385,13 @@ apps, which nobody could connect there. An app's own page, reached from an older
 available yet and that an administrator has to finish setting it up, instead of naming the setting.
 The administrator's page for the app still names `COMPOSIO_API_KEY`.
 
+### A new desktop install of v0.2.0 gets past Install again
+
+A desktop app built from `main` stopped every new install at "Installing OpenBot" with
+`shared/package.json: No such file or directory`. It had started reading `shared`, `toolkit` and
+`extension` as packages, which v0.2.0 does not have: there `shared` is plain source and there is no
+`toolkit` or `extension`. It now reads them only when the release includes them.
+
 ### A built-in Bot behind an OpenAI proxy answers again
 
 A built-in Bot behind a gateway or proxy in front of OpenAI (an `OPENAI_BASE_URL` that is not OpenAI or
